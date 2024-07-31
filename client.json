@@ -1,0 +1,7 @@
+[
+  {
+    "serverAddress": "192.168.0.1:443",
+    "localAddress":  "127.0.0.1:8086",
+    "token":         "jxasidqwieiqwoej"
+  }
+]
