@@ -41,13 +41,17 @@ func response(conn net.Conn, buf []byte, w []byte) (ans string, err error) {
 		a.Wait()
 		for i := 0; i < len(ch); i++ {
 			c := <-ch
-			buffer.Put(c)
+			if len(c) == pipe.HeaderBufSize {
+				buffer.Put(c)
+			}
 		}
 	}()
 	select {
 	case c := <-ch:
 		ans = string(c)
-		buffer.Put(c)
+		if len(c) == pipe.HeaderBufSize {
+			buffer.Put(c)
+		}
 		return
 	case <-timeOut.C:
 		err = errors.New("recover time out")
