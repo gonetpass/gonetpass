@@ -19,11 +19,12 @@ const (
 )
 
 func Run(port string, kind Kind, token string) (err error) {
-	hm := &handleContext{
-		port:      port,
-		forwardCh: make(chan *forward, 1000),
-		token:     pipe.Bytes2md5([]byte(token)),
-		kind:      kind,
+	c := &Context{
+		port:       port,
+		forwardCh:  make(chan *forward, 1000),
+		token:      pipe.Bytes2md5([]byte(token)),
+		kind:       kind,
+		headBuffer: pipe.NewBytesPool(pipe.HeaderBufSize),
 	}
 	l, err := net.Listen(string(kind), ":"+port)
 	if err != nil {
@@ -44,24 +45,20 @@ func Run(port string, kind Kind, token string) (err error) {
 				continue
 			}
 			go func(conn net.Conn) {
-				hm.handle(conn)
+				c.handle(conn)
 			}(conn)
 		}
 	}
 }
 
-func (hm *handleContext) sendString(conn net.Conn, str string) {
+func (c *Context) sendString(conn net.Conn, str string) {
 	defer conn.Close()
 	conn.Write([]byte(str + "\n"))
 }
 
-var (
-	buffer = pipe.NewBytesPool(pipe.HeaderBufSize)
-)
-
-func (hm *handleContext) handle(conn net.Conn) {
-	head := buffer.Get().([]byte) //创建一个可回收的bytes
-	defer buffer.Put(head)
+func (c *Context) handle(conn net.Conn) {
+	head := c.headBuffer.Get() //创建一个可回收的bytes
+	defer c.headBuffer.Put(head)
 	n, err := conn.Read(head)
 	if err != nil && n == 0 {
 		log.Println("read head size", n)
@@ -69,27 +66,27 @@ func (hm *handleContext) handle(conn net.Conn) {
 		return
 	}
 	//当读到的大小和bytes一致
-	if n == len(head) {
+	if n == cap(head) {
 		switch string(head[:n]) {
 		//判断是令牌
-		case hm.token:
+		case c.token:
 			//进入转发后端
 			go func(conn net.Conn) {
-				hm.forward(conn)
+				c.forward(conn)
 			}(conn)
 			return
 			//以下是获取api
-		case hm.token[:16] + pipe.Md5CanCount[:16]:
-			hm.sendString(conn, strconv.Itoa(int(atomic.LoadInt64(&hm.canCount))))
+		case c.token[:16] + pipe.Md5CanCount[:16]:
+			c.sendString(conn, strconv.Itoa(int(atomic.LoadInt64(&c.canCount))))
 			return
-		case hm.token[:16] + pipe.Md5UseCount[:16]:
-			hm.sendString(conn, strconv.Itoa(int(atomic.LoadInt64(&hm.useCount))))
+		case c.token[:16] + pipe.Md5UseCount[:16]:
+			c.sendString(conn, strconv.Itoa(int(atomic.LoadInt64(&c.useCount))))
 			return
 		}
 	}
 	defer conn.Close()
-	if atomic.LoadInt64(&hm.canCount) == 0 {
-		log.Println(hm.port, "no available resources")
+	if atomic.LoadInt64(&c.canCount) == 0 {
+		log.Println(c.port, "no available resources")
 		return
 	}
 	//新建一个接收后端的chan
@@ -108,14 +105,14 @@ func (hm *handleContext) handle(conn net.Conn) {
 		timer.Stop()
 	})
 	//发送到handleCh以待 forward 处理
-	hm.forwardCh <- &f
+	c.forwardCh <- &f
 	var cc net.Conn
 	select {
 	case cc = <-f.conn:
 		//拿到了forward传过来的conn
 		break
 	case <-timer.C:
-		log.Println(hm.port, "no available resources")
+		log.Println(c.port, "no available resources")
 		return
 	}
 	defer func() {
@@ -123,8 +120,8 @@ func (hm *handleContext) handle(conn net.Conn) {
 			cc.Close()
 		}
 	}()
-	atomic.AddInt64(&hm.useCount, 1)
-	defer atomic.AddInt64(&hm.useCount, -1)
+	atomic.AddInt64(&c.useCount, 1)
+	defer atomic.AddInt64(&c.useCount, -1)
 	connRead := bytes.NewBuffer(time.Minute)
 	//创建一个缓冲区用来中转，这个中间层的作用非常大
 	//由于之前已经读取了 head 此时conn中数据会丢失这部分，所以我们建立一个中间层
@@ -145,7 +142,7 @@ func (hm *handleContext) handle(conn net.Conn) {
 		//把用户数据转发给中间层
 		_, _ = pipe.Copy(ctx, connRead, conn, pipe.ReadTimeout, beat)
 	}()
-	switch hm.kind {
+	switch c.kind {
 	case Tcp:
 		go func() {
 			//把后端的数据返回给用户
@@ -164,7 +161,7 @@ func (hm *handleContext) handle(conn net.Conn) {
 			_, _ = pipe.Copy(ctx, cc, connRead, pipe.ReadTimeout, beat)
 		}()
 	default:
-		panic(hm.kind)
+		panic(c.kind)
 	}
 	a.Wait()
 }

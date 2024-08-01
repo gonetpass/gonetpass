@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func response(conn net.Conn, buf []byte, w []byte) (ans string, err error) {
+func (c *Context) forwardResponse(conn net.Conn, w []byte) (ans string, err error) {
 	_, err = conn.Write(w)
 	if err != nil {
 		return
@@ -21,18 +21,20 @@ func response(conn net.Conn, buf []byte, w []byte) (ans string, err error) {
 	a := sync.WaitGroup{}
 	a.Add(1)
 	go func() {
+		buf := c.headBuffer.Get()
+		defer c.headBuffer.Put(buf)
 		defer func() {
 			close(ch)
 			a.Done()
 		}()
 		n := 0
 		n, err = io.ReadFull(conn, buf)
-		if err != nil || atomic.LoadInt32(&complete) > 0 || n != len(buf) {
+		if err != nil || atomic.LoadInt32(&complete) > 0 || n != cap(buf) {
 			return
 		}
-		c := buffer.Get().([]byte)
-		copy(c, buf[:n])
-		ch <- c
+		p := c.headBuffer.Get()
+		copy(p, buf[:n])
+		ch <- p
 	}()
 	timeOut := time.NewTimer(pipe.PingPongTime)
 	defer func() {
@@ -40,18 +42,13 @@ func response(conn net.Conn, buf []byte, w []byte) (ans string, err error) {
 		timeOut.Stop()
 		a.Wait()
 		for i := 0; i < len(ch); i++ {
-			c := <-ch
-			if len(c) == pipe.HeaderBufSize {
-				buffer.Put(c)
-			}
+			_ = <-ch
 		}
 	}()
 	select {
-	case c := <-ch:
-		ans = string(c)
-		if len(c) == pipe.HeaderBufSize {
-			buffer.Put(c)
-		}
+	case p := <-ch:
+		ans = string(p)
+		c.headBuffer.Put(p)
 		return
 	case <-timeOut.C:
 		err = errors.New("recover time out")
@@ -59,9 +56,9 @@ func response(conn net.Conn, buf []byte, w []byte) (ans string, err error) {
 	}
 }
 
-func (hm *handleContext) forward(conn net.Conn) {
-	atomic.AddInt64(&hm.canCount, 1)
-	defer atomic.AddInt64(&hm.canCount, -1)
+func (c *Context) forward(conn net.Conn) {
+	atomic.AddInt64(&c.canCount, 1)
+	defer atomic.AddInt64(&c.canCount, -1)
 	var err error
 	defer func() {
 		if err != nil {
@@ -69,14 +66,12 @@ func (hm *handleContext) forward(conn net.Conn) {
 			conn.Close()
 		}
 	}()
-	buf := buffer.Get().([]byte)
-	defer buffer.Put(buf)
 	pingTick := time.NewTicker(pipe.PingPongTime)
 	defer pingTick.Stop()
 	resp := ""
 	for {
 		select {
-		case f := <-hm.forwardCh:
+		case f := <-c.forwardCh:
 			done := false
 			f.e.Exec(func() {
 				select {
@@ -89,8 +84,8 @@ func (hm *handleContext) forward(conn net.Conn) {
 				//h已经done 继续等待下一个h
 				continue
 			}
-			resp, err = response(conn, buf, []byte(hm.token))
-			if err != nil || resp != hm.token {
+			resp, err = c.forwardResponse(conn, []byte(c.token))
+			if err != nil || resp != c.token {
 				if err == nil {
 					err = errors.New("token error")
 				}
@@ -106,7 +101,7 @@ func (hm *handleContext) forward(conn net.Conn) {
 			})
 			return
 		case <-pingTick.C:
-			resp, err = response(conn, buf, []byte(pipe.Md5Ping))
+			resp, err = c.forwardResponse(conn, []byte(pipe.Md5Ping))
 			if err != nil || resp != pipe.Md5Pong {
 				if err == nil {
 					err = errors.New("pong error")

@@ -110,7 +110,7 @@ func handShake(c netClient) {
 		//log.Println("server2", err)
 		return
 	}
-	pong := buffer.Get().([]byte)
+	pong := buffer.Get()
 	defer buffer.Put(pong)
 	n := 0
 	jump := false

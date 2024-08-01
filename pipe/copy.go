@@ -28,7 +28,7 @@ func Copy(ctx context.Context, dst io.Writer, src io.Reader, readTimeout time.Du
 		ticker.Stop()
 	})
 	go func() {
-		buf := buffer.Get().([]byte)
+		buf := buffer.Get()
 		defer func() {
 			cancel()
 			buffer.Put(buf)
