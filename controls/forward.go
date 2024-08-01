@@ -42,7 +42,8 @@ func (c *Context) forwardResponse(conn net.Conn, w []byte) (ans string, err erro
 		timeOut.Stop()
 		a.Wait()
 		for i := 0; i < len(ch); i++ {
-			_ = <-ch
+			p := <-ch
+			c.headBuffer.Put(p)
 		}
 	}()
 	select {
