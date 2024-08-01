@@ -1,6 +1,4 @@
 ## golang开发的内网穿透，轻量级，占用内存小，性能好，易搭建，支持绑定域名，自动https 
-   程序体积特别小，server,client仅3mb，autohttps体积稍大(11mb),autohttps使用gin+autotls+反向代理进行https传输  
-   开源之前已经经过严格线上业务测试，可放心使用  
    
 1.download zip
 
