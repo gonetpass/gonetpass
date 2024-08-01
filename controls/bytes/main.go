@@ -26,8 +26,20 @@ func NewBuffer(readTimeout time.Duration) *Buffer {
 	}
 }
 
-func (r *Buffer) Write(p []byte) (n int, err error) {
+func (r *Buffer) write(p []byte) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.src.Write(p)
+}
+
+func (r *Buffer) read(p []byte) (n int, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.src.Read(p)
+}
+
+func (r *Buffer) Write(p []byte) (n int, err error) {
+	return r.write(p)
 }
 
 func (r *Buffer) Done() {
@@ -35,8 +47,6 @@ func (r *Buffer) Done() {
 }
 
 func (r *Buffer) Read(p []byte) (n int, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), r.readTimeout)
 	defer cancel()
 
@@ -45,7 +55,7 @@ func (r *Buffer) Read(p []byte) (n int, err error) {
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		default:
-			n, err = r.src.Read(p)
+			n, err = r.read(p)
 			if err != nil && err != io.EOF {
 				return 0, err
 			}
